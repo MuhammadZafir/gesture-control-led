@@ -1,0 +1,14 @@
+Arduino Pin	Component
+D2–D6	LED 1–5
+GND	Ground
+
+Use 220Ω resistors in series with each LED.
+
+How to Run
+Upload led_control.ino to your Arduino.
+
+Connect Arduino via USB.
+
+Run gesture_controller.py in the Python folder.
+
+Interact using your hand gestures!
