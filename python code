@@ -1,0 +1,106 @@
+import cv2
+import mediapipe as mp
+import serial
+import time
+import math
+
+# Serial communication setup
+arduino = serial.Serial('COM3', 9600)  # Change COM port as needed
+time.sleep(2)  # Let serial connection establish
+
+# MediaPipe hand detection setup
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(max_num_hands=1)
+mp_draw = mp.solutions.drawing_utils
+
+# Button layout and LED states
+buttons = {
+    "LED 1": (30, 50, 130, 100),
+    "LED 2": (150, 50, 250, 100),
+    "LED 3": (270, 50, 370, 100),
+    "LED 4": (390, 50, 490, 100),
+    "LED 5": (510, 50, 610, 100),
+}
+led_states = {key: False for key in buttons}
+cooldown = 0
+
+# Finger tip IDs for counting
+tip_ids = [4, 8, 12, 16, 20]
+
+# Count how many fingers are open
+def count_fingers(lm_list):
+    fingers = []
+
+    # Thumb (x comparison)
+    fingers.append(1 if lm_list[tip_ids[0]][0] < lm_list[tip_ids[0] - 1][0] else 0)
+
+    # Other 4 fingers (y comparison)
+    for i in range(1, 5):
+        fingers.append(1 if lm_list[tip_ids[i]][1] < lm_list[tip_ids[i] - 2][1] else 0)
+
+    return sum(fingers)
+
+# Start webcam
+cap = cv2.VideoCapture(0)
+
+while True:
+    success, frame = cap.read()
+    if not success:
+        break
+
+    frame = cv2.flip(frame, 1)
+    h, w, _ = frame.shape
+
+    # Draw button rectangles
+    for label, (x1, y1, x2, y2) in buttons.items():
+        color = (0, 255, 0) if led_states[label] else (0, 0, 255)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, -1)
+        cv2.putText(frame, label, (x1 + 20, y1 + 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+    # Detect hands
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb)
+
+    if results.multi_hand_landmarks:
+        for handLms in results.multi_hand_landmarks:
+            lm_list = [(int(lm.x * w), int(lm.y * h)) for lm in handLms.landmark]
+            mp_draw.draw_landmarks(frame, handLms, mp_hands.HAND_CONNECTIONS)
+
+            # Count fingers
+            fingers_up = count_fingers(lm_list)
+
+            # Fist = clutch mode, turn all off
+            if fingers_up == 0:
+                for key in led_states:
+                    led_states[key] = False
+
+            # Index finger to toggle buttons
+            if fingers_up >= 1:
+                index_tip = lm_list[8]
+                cv2.circle(frame, index_tip, 10, (255, 255, 0), -1)
+
+                if cooldown == 0:
+                    for label, (x1, y1, x2, y2) in buttons.items():
+                        if x1 < index_tip[0] < x2 and y1 < index_tip[1] < y2:
+                            led_states[label] = not led_states[label]
+                            cooldown = 20  # debounce
+
+    # Send LED states to Arduino as binary string (e.g., '10100')
+    led_order = sorted(led_states.keys())  # Ensure order: LED 1 to LED 5
+    binary_string = ''.join(['1' if led_states[key] else '0' for key in led_order])
+    arduino.write((binary_string + '\n').encode())
+
+    # Reduce cooldown
+    if cooldown > 0:
+        cooldown -= 1
+
+    # Show the window
+    cv2.imshow("Hand Gesture LED Controller", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Cleanup
+cap.release()
+cv2.destroyAllWindows()
+arduino.close()
